@@ -4,30 +4,47 @@ import ru.otus.appcontainer.api.AppComponent;
 import ru.otus.appcontainer.api.AppComponentsContainer;
 import ru.otus.appcontainer.api.AppComponentsContainerConfig;
 
-import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.*;
 
 public class AppComponentsContainerImpl implements AppComponentsContainer {
 
-    private static final Set<String> INVALID_APP_COMPONENT_NAMES = new HashSet<>(){{
-        add("");
+    private static final Set<Character> CHECKING_FILTER_DATA = new HashSet<>(){{
+        add(' ');
+        add('\t');
     }};
 
     private final Map<String, Class[]> nameAndParamMatching = new HashMap<>();
-    private final Map<Class, String> classAndNameMatching = new HashMap<>();
+
     private final Set<String> appComponentNames = new HashSet<>();
     private final Map<String, Object> appComponentsByName = new HashMap<>();
+    private final Map<Class, Object> appComponentsByClass = new HashMap<>();
 
-    public AppComponentsContainerImpl(Class<?> initialConfigClass) throws InvocationTargetException, NoSuchMethodException, InstantiationException, IllegalAccessException {
+    public AppComponentsContainerImpl(Class<?> initialConfigClass) throws Exception {
         processConfig(initialConfigClass);
     }
 
-    private void processConfig(Class<?> configClass) throws NoSuchMethodException, IllegalAccessException, InvocationTargetException, InstantiationException {
+    private void processConfig(Class<?> configClass) throws Exception {
         checkConfigClass(configClass);
 
-        Map<Integer, Set<String>> prepData = new HashMap<>();
+        Map<Integer, Set<String>> preparedData = prepareMethodData(configClass);
+        Object config = configClass.getConstructor().newInstance();
 
+        for (Map.Entry<Integer, Set<String>> entity : preparedData.entrySet()){
+            Set<String> names = entity.getValue();
+            for (String name : names) {
+                Class[] params = nameAndParamMatching.get(name);
+                Method method = configClass.getDeclaredMethod(name, params);
+                Object component = createComponent(config, method, params);
+                appComponentsByName.put(name, component);
+                appComponentsByClass.put(method.getReturnType(), component);
+            }
+        }
+    }
+
+    private Map<Integer, Set<String>> prepareMethodData(Class<?> configClass){
+
+        Map<Integer, Set<String>> preparedData = new HashMap<>();
         Method[] declaredMethods = configClass.getDeclaredMethods();
         for (Method declaredMethod : declaredMethods) {
             if (declaredMethod.isAnnotationPresent(AppComponent.class)){
@@ -40,34 +57,28 @@ public class AppComponentsContainerImpl implements AppComponentsContainer {
                 appComponentNames.add(name);
                 nameAndParamMatching.put(name, declaredMethod.getParameterTypes());
 
-                if (prepData.containsKey(order)){
-                    prepData.get(order).add(name);
+                if (preparedData.containsKey(order)){
+                    preparedData.get(order).add(name);
                 } else {
-                    prepData.put(order, new TreeSet<>(){{add(name);}});
+                    preparedData.put(order, new TreeSet<>(){{add(name);}});
                 }
             }
         }
 
-        Object config = configClass.getConstructor().newInstance();
+        return preparedData;
+    }
 
-        Set<Integer> keys = prepData.keySet();
-        for (Integer key : keys) {
-            Set<String> names = prepData.get(key);
-            for (String name : names) {
-                Class[] params = nameAndParamMatching.get(name);
-                Method declaredMethod = configClass.getDeclaredMethod(name, params);
-                Object[] objects = new Object[params.length];
-                for(int i = 0; i < params.length; i++){
-                    objects[i] = appComponentsByName.get(
-                        classAndNameMatching.get(params[i])
-                    );
-                }
-
-                Object invoke = declaredMethod.invoke(config, objects);
-                appComponentsByName.put(name, invoke);
-                classAndNameMatching.put(declaredMethod.getReturnType(), name);
+    private Object createComponent(Object config, Method method, Class[] params) throws Exception {
+        Object[] objects = new Object[params.length];
+        for(int i = 0; i < params.length; i++){
+            if (appComponentsByClass.containsKey(params[i])){
+                objects[i] = appComponentsByClass.get(params[i]);
+            } else {
+                throw new Exception(String.format("The component %s doesn't exist", params[i]));
             }
         }
+
+        return method.invoke(config, objects);
     }
 
     private void checkConfigClass(Class<?> configClass) {
@@ -77,16 +88,21 @@ public class AppComponentsContainerImpl implements AppComponentsContainer {
     }
 
     private void checkAppComponentName(String appComponentName){
-        if (INVALID_APP_COMPONENT_NAMES.contains(appComponentName)){
-            throw new IllegalArgumentException(String.format("Invalid name %s", appComponentName));
+        String name = new String(appComponentName);
+        for (Character checkingFilterDatum : CHECKING_FILTER_DATA) {
+            name = name.replace(checkingFilterDatum.toString(), "");
+        }
+
+        if (name.isEmpty()){
+            throw new IllegalArgumentException(String.format("Invalid name '%s'", appComponentName));
         } else if (appComponentNames.contains(appComponentName)){
-            throw new IllegalArgumentException(String.format("Duplicate name %s", appComponentName));
+            throw new IllegalArgumentException(String.format("Duplicate name '%s'", appComponentName));
         }
     }
 
     @Override
     public <C> C getAppComponent(Class<C> componentClass) {
-        return getAppComponent(classAndNameMatching.get(componentClass));
+        return (C) appComponentsByClass.get(componentClass);
     }
 
     @Override
