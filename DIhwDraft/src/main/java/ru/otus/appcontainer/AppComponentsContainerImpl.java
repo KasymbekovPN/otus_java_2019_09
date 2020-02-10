@@ -36,8 +36,15 @@ public class AppComponentsContainerImpl implements AppComponentsContainer {
                 Class[] params = nameAndParamMatching.get(name);
                 Method method = configClass.getDeclaredMethod(name, params);
                 Object component = createComponent(config, method, params);
+
+                Class<?> returnType = method.getReturnType();
+                Class<?> componentClass = component.getClass();
+                appComponentsByClass.put(returnType, component);
+                if (!returnType.equals(componentClass)){
+                    appComponentsByClass.put(componentClass, component);
+                }
+
                 appComponentsByName.put(name, component);
-                appComponentsByClass.put(method.getReturnType(), component);
             }
         }
     }
